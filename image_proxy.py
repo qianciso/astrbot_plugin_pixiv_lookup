@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
@@ -97,7 +98,9 @@ class PixivImageProxy:
                     quality=quality,
                     proxy_host=host,
                 )
-        except (aiohttp.ClientError, TimeoutError) as exc:
+        # Python 3.10 中 asyncio.TimeoutError 与内置 TimeoutError 尚不是同一类型，
+        # 两者都捕获才能把不同 Python 版本的网络超时统一转换为插件错误。
+        except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError) as exc:
             raise ImageDownloadError("反代网络请求失败") from exc
 
     async def fetch(self, page: ArtworkPage, preferred_quality: str) -> DownloadedImage:
