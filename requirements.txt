@@ -1,0 +1,2 @@
+pixivpy-async>=1.2.14,<2
+aiohttp>=3.9,<4

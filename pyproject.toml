@@ -1,0 +1,30 @@
+[project]
+name = "astrbot-plugin-pixiv-lookup"
+version = "1.0.0"
+description = "AstrBot Pixiv artwork lookup plugin for aiocqhttp/NapCat"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "qiansaw" }]
+dependencies = [
+  "pixivpy-async>=1.2.14,<2",
+  "aiohttp>=3.9,<4",
+]
+
+[project.urls]
+Repository = "https://github.com/qianciso/astrbot_plugin_pixiv_lookup"
+Issues = "https://github.com/qianciso/astrbot_plugin_pixiv_lookup/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "anyio: run this coroutine test with the AnyIO pytest plugin",
+  "live: optional real Pixiv API test requiring explicit safe credentials",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
