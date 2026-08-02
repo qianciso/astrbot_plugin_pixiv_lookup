@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
 from astrbot_plugin_pixiv_lookup.exceptions import ImageDownloadError, MetadataError
 from astrbot_plugin_pixiv_lookup.image_proxy import (
     MAX_IMAGE_BYTES,

@@ -5,8 +5,8 @@ import sys
 import types
 
 import pytest
-
 from astrbot_plugin_pixiv_lookup.exceptions import (
+    ArtistNotFoundError,
     ArtworkNotFoundError,
     ConfigurationError,
     MetadataError,
@@ -180,3 +180,114 @@ async def test_provider_maps_timeout_not_found_and_bad_response():
     provider._api = InvalidAPI()
     with pytest.raises(ProviderError, match="格式"):
         await provider.get_artwork(1)
+
+
+@pytest.mark.anyio
+async def test_artist_provider_filters_manga_deduplicates_and_paginates():
+    calls = []
+
+    class ArtistAPI:
+        async def user_detail(self, artist_id):
+            return {
+                "user": {"id": artist_id, "name": "画师", "account": "artist"},
+            }
+
+        async def user_illusts(self, **kwargs):
+            calls.append(kwargs)
+            if "offset" not in kwargs:
+                first = single_illust(id=1)
+                return {
+                    "illusts": [
+                        single_illust(id=99, type="manga"),
+                        first,
+                        dict(first),
+                    ],
+                    "next_url": "https://app-api.pixiv.net/v1/user/illusts?offset=30",
+                }
+            return {
+                "illusts": [
+                    single_illust(id=2, type="ugoira"),
+                    {"id": 3, "type": "illust", "x_restrict": 0},
+                ],
+                "next_url": None,
+            }
+
+    provider = PixivProvider("token", "", 1)
+    provider._api = ArtistAPI()
+    result = await provider.get_artist_artworks(42, 3)
+
+    assert result.profile.user_id == 42
+    assert result.profile.name == "画师"
+    assert [entry.illust_id for entry in result.entries] == [1, 2, 3]
+    assert result.entries[1].artwork.artwork_type == "ugoira"
+    assert result.entries[2].artwork is None
+    assert calls == [
+        {"user_id": 42, "type": "illust"},
+        {"user_id": 42, "type": "illust", "offset": 30},
+    ]
+
+
+@pytest.mark.anyio
+async def test_artist_provider_pick_starts_at_requested_position():
+    calls = []
+
+    class ArtistAPI:
+        async def user_detail(self, artist_id):
+            return {
+                "user": {"id": artist_id, "name": "画师", "account": "artist"},
+                "profile": {"total_illusts": 30},
+            }
+
+        async def user_illusts(self, **kwargs):
+            calls.append(kwargs)
+            return {"illusts": [single_illust(id=13)], "next_url": None}
+
+    provider = PixivProvider("token", "", 1)
+    provider._api = ArtistAPI()
+    result = await provider.get_artist_artworks(42, 1, start_position=13)
+
+    assert calls == [{"user_id": 42, "type": "illust", "offset": 12}]
+    assert result.profile.total_illusts == 30
+    assert len(result.entries) == 1
+    assert result.entries[0].position == 13
+    assert result.entries[0].illust_id == 13
+
+
+@pytest.mark.anyio
+async def test_artist_provider_empty_not_found_timeout_and_bad_list():
+    provider = PixivProvider("token", "", 0.001)
+
+    class EmptyAPI:
+        async def user_detail(self, artist_id):
+            return {"user": {"id": artist_id, "name": "画师"}}
+
+        async def user_illusts(self, **kwargs):
+            return {"illusts": [], "next_url": None}
+
+    provider._api = EmptyAPI()
+    empty = await provider.get_artist_artworks(42, 10)
+    assert empty.entries == () and empty.exhausted
+
+    class NotFoundAPI:
+        async def user_detail(self, artist_id):
+            return {"error": {"message": "not found"}}
+
+    provider._api = NotFoundAPI()
+    with pytest.raises(ArtistNotFoundError):
+        await provider.get_artist_artworks(42, 1)
+
+    class TimeoutAPI:
+        async def user_detail(self, artist_id):
+            await asyncio.Event().wait()
+
+    provider._api = TimeoutAPI()
+    with pytest.raises(ProviderError, match="超时"):
+        await provider.get_artist_artworks(42, 1)
+
+    class BadListAPI(EmptyAPI):
+        async def user_illusts(self, **kwargs):
+            return {"illusts": None}
+
+    provider._api = BadListAPI()
+    with pytest.raises(ProviderError, match="列表格式"):
+        await provider.get_artist_artworks(42, 1)

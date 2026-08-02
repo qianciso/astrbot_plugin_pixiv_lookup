@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from astrbot_plugin_pixiv_lookup.formatting import format_artwork_info
 from astrbot_plugin_pixiv_lookup.models import Artwork, ArtworkPage, Rating
 from astrbot_plugin_pixiv_lookup.policy import R18ContentPolicy
@@ -29,22 +28,40 @@ def make_artwork(rating: Rating = Rating.SAFE) -> Artwork:
 
 
 @pytest.mark.parametrize("rating", [Rating.R18, Rating.R18G])
-def test_r18_is_blocked_by_default(rating):
-    reason = R18ContentPolicy().rejection_reason(make_artwork(rating), False)
+def test_sensitive_ratings_are_blocked_by_default(rating):
+    reason = R18ContentPolicy().rejection_reason(make_artwork(rating), False, False)
     assert reason is not None
     assert rating.display_name in reason
     assert "不能发送" in reason
 
 
-@pytest.mark.parametrize("rating", [Rating.R18, Rating.R18G])
-def test_r18_is_allowed_when_master_switch_is_enabled(rating):
-    assert R18ContentPolicy().rejection_reason(make_artwork(rating), True) is None
+@pytest.mark.parametrize(
+    ("rating", "r18_enabled", "r18g_enabled", "allowed"),
+    [
+        (Rating.R18, True, False, True),
+        (Rating.R18, False, True, False),
+        (Rating.R18G, True, False, False),
+        (Rating.R18G, False, True, True),
+    ],
+)
+def test_r18_and_r18g_switches_are_independent(
+    rating,
+    r18_enabled,
+    r18g_enabled,
+    allowed,
+):
+    reason = R18ContentPolicy().rejection_reason(
+        make_artwork(rating),
+        r18_enabled,
+        r18g_enabled,
+    )
+    assert (reason is None) is allowed
 
 
 def test_unknown_rating_is_always_blocked():
     policy = R18ContentPolicy()
-    assert policy.rejection_reason(make_artwork(Rating.UNKNOWN), False)
-    assert policy.rejection_reason(make_artwork(Rating.UNKNOWN), True)
+    assert policy.rejection_reason(make_artwork(Rating.UNKNOWN), False, False)
+    assert policy.rejection_reason(make_artwork(Rating.UNKNOWN), True, True)
 
 
 def test_formatting_includes_available_metadata_page_and_actual_quality():

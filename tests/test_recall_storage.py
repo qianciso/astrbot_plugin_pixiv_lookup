@@ -5,7 +5,6 @@ import os
 import time
 
 import pytest
-
 from astrbot_plugin_pixiv_lookup.recall import RecallManager
 from astrbot_plugin_pixiv_lookup.storage import PluginLogManager
 

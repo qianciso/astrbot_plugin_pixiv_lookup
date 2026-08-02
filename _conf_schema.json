@@ -13,23 +13,42 @@
     "hint": "如果机器人无法连接 Pixiv，请填写代理软件提供的本地 HTTP 地址。例如 Clash、Clash Verge、Mihomo 或 v2rayN 设置页中的“HTTP 端口”或“混合端口”为 7890 时，填写 http://127.0.0.1:7890；实际端口以你的代理软件为准。不要填写节点名称、订阅地址，也不要填写日志中 FROM 后面每次变化的临时端口。不使用代理时留空。此项只帮助机器人登录 Pixiv 和读取作品信息，图片仍使用下方的图片反代；暂不支持 SOCKS 或需要用户名、密码的代理。"
   },
   "command_name": {
-    "description": "查询命令",
+    "description": "作品 ID 查询命令",
     "type": "string",
     "default": "pi",
-    "hint": "可填写 pi 或 /pi，不允许空格和额外斜杠。保存后 AstrBot 会热重载插件并注册新命令。"
+    "hint": "用于按作品 ID 查询。可填写 pi 或 /pi，不允许空格和额外斜杠。保存后 AstrBot 会热重载插件并注册新命令。"
+  },
+  "artist_command_name": {
+    "description": "画师查询命令",
+    "type": "string",
+    "default": "pa",
+    "hint": "用于查询画师最新插画。可填写 pa 或 /pa，不能与作品 ID 查询命令同名。"
+  },
+  "artist_max_results": {
+    "description": "画师查询单次返回上限",
+    "type": "int",
+    "default": 10,
+    "slider": {"min": 1, "max": 20, "step": 1},
+    "hint": "只限制 latest（模式 1）一次返回的作品数量，不限制 pick（模式 0）查询第几个作品。"
   },
   "r18_enabled": {
-    "description": "允许发送 R18/R18G 作品",
+    "description": "允许发送 R18 作品",
     "type": "bool",
     "default": false,
-    "hint": "总控开关，默认关闭。开启后敏感作品会按配置时间自动撤回。"
+    "hint": "只控制分级为 R18 的作品，默认关闭。开启后相关消息会按配置时间自动撤回。"
+  },
+  "r18g_enabled": {
+    "description": "允许发送 R18G 作品",
+    "type": "bool",
+    "default": false,
+    "hint": "只控制分级为 R18G 的作品，默认关闭，与 R18 开关相互独立。开启后相关消息会按配置时间自动撤回。"
   },
   "r18_recall_seconds": {
     "description": "R18 消息撤回延迟（秒）",
     "type": "int",
     "default": 120,
     "slider": {"min": 5, "max": 120, "step": 5},
-    "hint": "仅影响 R18/R18G 作品。热重载、停用或卸载插件时，尚未到期的敏感消息会立即撤回。"
+    "hint": "影响已经获准发送的 R18/R18G 作品。热重载、停用或卸载插件时，尚未到期的敏感消息会立即撤回。"
   },
   "image_size": {
     "description": "默认图片尺寸",

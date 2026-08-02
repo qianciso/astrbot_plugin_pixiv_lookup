@@ -56,6 +56,38 @@ class Artwork:
 
 
 @dataclass(slots=True, frozen=True)
+class ArtistProfile:
+    """画师查询结果中需要展示的稳定资料。"""
+
+    user_id: int
+    name: str
+    account: str
+    total_illusts: int | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class ArtistArtworkEntry:
+    """画师作品列表中的一个原始排名项。
+
+    元数据异常的作品仍保留排名，但 ``artwork`` 为 ``None``。这样 `/pa`
+    不会用更早的作品补齐失败项或被内容策略阻止的项目。
+    """
+
+    position: int
+    illust_id: int | None
+    artwork: Artwork | None
+
+
+@dataclass(slots=True, frozen=True)
+class ArtistWorks:
+    """画师资料及按发布时间从新到旧排列的插画作品。"""
+
+    profile: ArtistProfile
+    entries: tuple[ArtistArtworkEntry, ...]
+    exhausted: bool
+
+
+@dataclass(slots=True, frozen=True)
 class DownloadedImage:
     """已经校验、可交给 OneBot 发送的图片。"""
 
@@ -63,3 +95,12 @@ class DownloadedImage:
     content_type: str
     quality: str
     proxy_host: str
+
+
+@dataclass(slots=True, frozen=True)
+class ArtworkMessageItem:
+    """批量 OneBot 消息中的一个已下载图文项目。"""
+
+    info_text: str
+    page_text: str
+    image: DownloadedImage

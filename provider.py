@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import re
+from contextlib import suppress
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from .exceptions import (
+    ArtistNotFoundError,
     ArtworkNotFoundError,
     ConfigurationError,
     MetadataError,
     ProviderError,
 )
-from .models import Artwork, ArtworkPage, Rating
+from .models import (
+    ArtistArtworkEntry,
+    ArtistProfile,
+    ArtistWorks,
+    Artwork,
+    ArtworkPage,
+    Rating,
+)
 
 
 class _CaptionParser(HTMLParser):
@@ -167,6 +177,32 @@ def parse_artwork(illust: dict[str, Any]) -> Artwork:
     )
 
 
+def _error_text(response: dict[str, Any]) -> str:
+    """把上游错误压缩为只用于分类的文本，不写入插件日志。"""
+
+    return str(response.get("error") or "").casefold()
+
+
+def _looks_not_found(message: str) -> bool:
+    return any(marker in message for marker in ("404", "not found", "見つかりません"))
+
+
+def _optional_positive_int(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _optional_nonnegative_int(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
 class PixivProvider:
     """复用登录状态、按需刷新会话的异步 Pixiv 客户端。"""
 
@@ -240,6 +276,141 @@ class PixivProvider:
             raise ArtworkNotFoundError("作品不存在或不可见")
         return parse_artwork(illust)
 
+    async def _get_artist_profile(self, api: Any, artist_id: int) -> ArtistProfile:
+        try:
+            response = await asyncio.wait_for(
+                api.user_detail(artist_id),
+                timeout=self.timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ProviderError("Pixiv 画师资料请求超时") from exc
+        except Exception as exc:
+            if _looks_not_found(str(exc).casefold()):
+                raise ArtistNotFoundError("画师不存在") from exc
+            raise ProviderError("Pixiv 画师资料请求失败") from exc
+
+        if not isinstance(response, dict):
+            raise ProviderError("Pixiv 画师资料返回格式异常")
+        if response.get("error"):
+            if _looks_not_found(_error_text(response)):
+                raise ArtistNotFoundError("画师不存在")
+            raise ProviderError("Pixiv 拒绝了画师查询")
+        user = response.get("user")
+        if not isinstance(user, dict):
+            raise ArtistNotFoundError("画师不存在或不可见")
+        response_id = _optional_positive_int(user.get("id"))
+        if response_id is None:
+            raise ProviderError("Pixiv 画师资料缺少合法 ID")
+        profile_data = response.get("profile")
+        total_illusts = (
+            _optional_nonnegative_int(profile_data.get("total_illusts"))
+            if isinstance(profile_data, dict)
+            else None
+        )
+        return ArtistProfile(
+            user_id=response_id,
+            name=str(user.get("name") or "未知画师").strip(),
+            account=str(user.get("account") or "").strip(),
+            total_illusts=total_illusts,
+        )
+
+    async def get_artist_artworks(
+        self,
+        artist_id: int,
+        limit: int,
+        start_position: int = 1,
+    ) -> ArtistWorks:
+        """从 ``start_position`` 开始读取 ``limit`` 项画师插画。
+
+        App API 的 ``type=illust`` 会包含普通插画和 ugoira 静态预览。这里仍显式
+        过滤 ``manga``，防止上游返回范围变化时把漫画意外纳入 v1.1 的结果。
+
+        ``pick`` 查询会把目标排名换算为 API offset，只拉取目标处开始的一页，
+        因而排名不受批量返回上限影响，也不会为较大的排名下载前面所有元数据。
+        """
+
+        limit = max(1, min(int(limit), 20))
+        start_position = max(1, int(start_position))
+        api = await self._get_api()
+        profile = await self._get_artist_profile(api, artist_id)
+        entries: list[ArtistArtworkEntry] = []
+        seen_ids: set[int] = set()
+        offset: int | None = start_position - 1 if start_position > 1 else None
+        seen_offsets: set[int] = {offset} if offset is not None else set()
+        exhausted = False
+
+        # 正常 API 一页已经足够覆盖 20 项；页数上限只用于防御异常 next_url 循环。
+        for _ in range(10):
+            kwargs: dict[str, object] = {"user_id": artist_id, "type": "illust"}
+            if offset is not None:
+                kwargs["offset"] = offset
+            try:
+                response = await asyncio.wait_for(
+                    api.user_illusts(**kwargs),
+                    timeout=self.timeout,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ProviderError("Pixiv 画师作品请求超时") from exc
+            except Exception as exc:
+                if _looks_not_found(str(exc).casefold()):
+                    raise ArtistNotFoundError("画师不存在") from exc
+                raise ProviderError("Pixiv 画师作品请求失败") from exc
+
+            if not isinstance(response, dict):
+                raise ProviderError("Pixiv 画师作品返回格式异常")
+            if response.get("error"):
+                if _looks_not_found(_error_text(response)):
+                    raise ArtistNotFoundError("画师不存在")
+                raise ProviderError("Pixiv 拒绝了画师作品查询")
+            raw_illusts = response.get("illusts")
+            if not isinstance(raw_illusts, list):
+                raise ProviderError("Pixiv 画师作品列表格式异常")
+
+            for raw in raw_illusts:
+                if len(entries) >= limit:
+                    break
+                if isinstance(raw, dict) and str(raw.get("type") or "").casefold() == "manga":
+                    continue
+                illust_id = (
+                    _optional_positive_int(raw.get("id")) if isinstance(raw, dict) else None
+                )
+                if illust_id is not None:
+                    if illust_id in seen_ids:
+                        continue
+                    seen_ids.add(illust_id)
+
+                artwork: Artwork | None = None
+                if isinstance(raw, dict):
+                    try:
+                        artwork = parse_artwork(raw)
+                    except MetadataError:
+                        # 失败项计入原始排名，交给命令层汇总，而不是使用更早作品补位。
+                        artwork = None
+                entries.append(
+                    ArtistArtworkEntry(
+                        position=start_position + len(entries),
+                        illust_id=illust_id,
+                        artwork=artwork,
+                    ),
+                )
+
+            if len(entries) >= limit:
+                break
+            next_url = response.get("next_url")
+            if not isinstance(next_url, str) or not next_url.strip():
+                exhausted = True
+                break
+            values = parse_qs(urlsplit(next_url).query).get("offset", [])
+            next_offset = _optional_positive_int(values[0] if values else None)
+            if next_offset is None or next_offset in seen_offsets:
+                raise ProviderError("Pixiv 画师作品分页信息异常")
+            seen_offsets.add(next_offset)
+            offset = next_offset
+        else:
+            raise ProviderError("Pixiv 画师作品分页次数异常")
+
+        return ArtistWorks(profile=profile, entries=tuple(entries), exhausted=exhausted)
+
     async def close(self) -> None:
         async with self._lock:
             self._closed = True
@@ -251,7 +422,5 @@ class PixivProvider:
         if callable(close):
             result = close()
             if asyncio.iscoroutine(result):
-                try:
+                with suppress(Exception):
                     await asyncio.wait_for(result, timeout=5)
-                except Exception:
-                    pass

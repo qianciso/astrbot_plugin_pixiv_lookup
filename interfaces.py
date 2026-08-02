@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from .models import Artwork, ArtworkPage, DownloadedImage
+from .models import (
+    ArtistWorks,
+    Artwork,
+    ArtworkMessageItem,
+    ArtworkPage,
+    DownloadedImage,
+)
 
 
 class ArtworkProvider(Protocol):
@@ -17,6 +23,16 @@ class ArtworkProvider(Protocol):
 
     async def close(self) -> None:
         """关闭上游客户端。"""
+
+
+class ArtistArtworkProvider(Protocol):
+    async def get_artist_artworks(
+        self,
+        artist_id: int,
+        limit: int,
+        start_position: int = 1,
+    ) -> ArtistWorks:
+        """从指定最新排名开始，获取画师的插画/动图静态预览。"""
 
 
 class ImageProxyStrategy(Protocol):
@@ -43,6 +59,23 @@ class MessageSender(Protocol):
         """撤回由机器人发送的消息。"""
 
 
+class BatchMessageSender(Protocol):
+    async def send_artworks(
+        self,
+        event: Any,
+        header_text: str,
+        items: list[ArtworkMessageItem],
+        *,
+        as_forward: bool,
+    ) -> tuple[str, ...]:
+        """分批发送多个作品并返回所有 OneBot 消息 ID。"""
+
+
 class ContentPolicy(Protocol):
-    def rejection_reason(self, artwork: Artwork, r18_enabled: bool) -> str | None:
+    def rejection_reason(
+        self,
+        artwork: Artwork,
+        r18_enabled: bool,
+        r18g_enabled: bool,
+    ) -> str | None:
         """允许发送时返回 None，否则返回面向用户的原因。"""

@@ -3,10 +3,16 @@ from __future__ import annotations
 import base64
 
 import pytest
-
-from astrbot_plugin_pixiv_lookup.exceptions import MessageSendError
-from astrbot_plugin_pixiv_lookup.messaging import OneBotMessageSender, extract_message_id
-from astrbot_plugin_pixiv_lookup.models import DownloadedImage
+from astrbot_plugin_pixiv_lookup.exceptions import (
+    BatchMessageSendError,
+    MessageSendError,
+)
+from astrbot_plugin_pixiv_lookup.messaging import (
+    OneBotMessageSender,
+    extract_message_id,
+    split_artwork_items,
+)
+from astrbot_plugin_pixiv_lookup.models import ArtworkMessageItem, DownloadedImage
 
 
 class FakeBot:
@@ -44,6 +50,11 @@ class FakeEvent:
 
 def image() -> DownloadedImage:
     return DownloadedImage(b"image-bytes", "image/jpeg", "large", "i.pixiv.re")
+
+
+def batch_item(data=b"image-bytes", label="作品") -> ArtworkMessageItem:
+    image_value = DownloadedImage(data, "image/jpeg", "large", "i.pixiv.re")
+    return ArtworkMessageItem(label, "第 1/1 幅", image_value)
 
 
 @pytest.mark.parametrize(
@@ -154,3 +165,69 @@ async def test_recall_uses_delete_msg_and_numeric_id():
     bot = FakeBot()
     await OneBotMessageSender().recall(bot, "987", "30003")
     assert bot.calls == [("delete_msg", {"message_id": 987, "self_id": "30003"})]
+
+
+def test_batch_items_are_split_by_raw_image_size():
+    chunks = split_artwork_items(
+        [batch_item(b"12"), batch_item(b"34"), batch_item(b"5")],
+        max_bytes=3,
+    )
+    assert [len(chunk) for chunk in chunks] == [1, 2]
+
+
+@pytest.mark.anyio
+async def test_batch_forward_and_normal_payloads():
+    sender = OneBotMessageSender()
+    event = FakeEvent()
+    ids = await sender.send_artworks(
+        event,
+        "画师信息",
+        [batch_item(label="作品一"), batch_item(label="作品二")],
+        as_forward=True,
+    )
+    assert ids == ("987",)
+    action, payload = event.bot.calls[0]
+    assert action == "send_group_forward_msg"
+    assert len(payload["messages"]) == 3
+    assert payload["messages"][0]["data"]["content"][0]["data"]["text"] == "画师信息"
+    assert "作品二" in payload["messages"][2]["data"]["content"][0]["data"]["text"]
+
+    private_event = FakeEvent(group_id="")
+    await sender.send_artworks(
+        private_event,
+        "画师信息",
+        [batch_item()],
+        as_forward=False,
+    )
+    action, payload = private_event.bot.calls[0]
+    assert action == "send_private_msg"
+    assert payload["message"][0]["data"]["text"] == "画师信息"
+    assert payload["message"][2]["type"] == "image"
+
+
+@pytest.mark.anyio
+async def test_batch_partial_failure_preserves_previous_message_ids(monkeypatch):
+    class SequenceBot:
+        def __init__(self):
+            self.calls = []
+            self.responses = [{"message_id": 1}, RuntimeError("transport down")]
+
+        async def call_action(self, action, **kwargs):
+            self.calls.append((action, kwargs))
+            response = self.responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+    monkeypatch.setattr("astrbot_plugin_pixiv_lookup.messaging.MAX_BATCH_MESSAGE_BYTES", 3)
+    event = FakeEvent()
+    event.bot = SequenceBot()
+    with pytest.raises(BatchMessageSendError) as error:
+        await OneBotMessageSender().send_artworks(
+            event,
+            "画师信息",
+            [batch_item(b"12"), batch_item(b"34")],
+            as_forward=True,
+        )
+    assert error.value.message_ids == ("1",)
+    assert len(event.bot.calls) == 2

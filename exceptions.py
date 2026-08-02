@@ -17,6 +17,10 @@ class ArtworkNotFoundError(PixivLookupError):
     """作品不存在、已删除或当前账号不可见。"""
 
 
+class ArtistNotFoundError(PixivLookupError):
+    """画师不存在、账号已停用或当前 Pixiv 账号不可见。"""
+
+
 class MetadataError(PixivLookupError):
     """作品元数据不完整，无法安全发送。"""
 
@@ -35,3 +39,14 @@ class ImageTooLargeError(ImageDownloadError):
 
 class MessageSendError(PixivLookupError):
     """OneBot 消息发送失败或未返回消息 ID。"""
+
+
+class BatchMessageSendError(MessageSendError):
+    """批量消息仅部分发送成功。
+
+    ``message_ids`` 用于让调用方继续为已经发出的敏感批次安排撤回。
+    """
+
+    def __init__(self, message: str, message_ids: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.message_ids = message_ids
