@@ -1,8 +1,8 @@
 name: astrbot_plugin_pixiv_lookup
-display_name: Pixiv ID 查询
-short_desc: 通过 Pixiv 作品 ID 或画师 ID 查询作品并使用大陆可用反代发送图片
-desc: 支持画师最新插画、多图页码、四档图片尺寸、独立 R18/R18G 开关、QQ 合并转发与自动撤回。
-version: v1.1.0
+display_name: Pixiv 查询
+short_desc: 通过 Pixiv 作品 ID、画师 ID 或标签查询作品并使用大陆可用反代发送图片
+desc: 支持标签搜索、画师最新插画、多图首图、四档图片尺寸、独立 R18/R18G 开关、QQ 合并转发与自动撤回。
+version: v1.2.0
 author: qiansaw
 repo: https://github.com/qianciso/astrbot_plugin_pixiv_lookup
 astrbot_version: ">=4.26.7"

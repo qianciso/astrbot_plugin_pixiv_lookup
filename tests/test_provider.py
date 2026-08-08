@@ -221,6 +221,7 @@ async def test_artist_provider_filters_manga_deduplicates_and_paginates():
     assert [entry.illust_id for entry in result.entries] == [1, 2, 3]
     assert result.entries[1].artwork.artwork_type == "ugoira"
     assert result.entries[2].artwork is None
+    assert result.entries[0].artwork.translated_tags == ()
     assert calls == [
         {"user_id": 42, "type": "illust"},
         {"user_id": 42, "type": "illust", "offset": 30},
@@ -251,6 +252,121 @@ async def test_artist_provider_pick_starts_at_requested_position():
     assert len(result.entries) == 1
     assert result.entries[0].position == 13
     assert result.entries[0].illust_id == 13
+
+
+@pytest.mark.anyio
+async def test_tag_provider_builds_search_payload_and_filters_ai_and_excluded_tags():
+    calls = []
+
+    class TagAPI:
+        async def search_illust(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            if kwargs["offset"] == 90:
+                return {
+                    "illusts": [
+                        single_illust(id=4, type="manga"),
+                        single_illust(id=5, type="ugoira"),
+                    ],
+                    "next_url": "https://app-api.pixiv.net/v1/search/illust?offset=120",
+                }
+            return {
+                "illusts": [
+                    single_illust(id=1, tags=[{"name": "黑髮", "translated_name": "black hair"}]),
+                    single_illust(id=2, illust_ai_type=2),
+                    single_illust(id=3, tags=[{"name": "R18"}]),
+                    single_illust(id=4, type="manga"),
+                ],
+                "next_url": "https://app-api.pixiv.net/v1/search/illust?offset=60",
+            }
+
+    provider = PixivProvider("token", "", 1)
+    provider._api = TagAPI()
+    result = await provider.search_tag_page(
+        "黑髮",
+        page=2,
+        search_target="exact_match_for_tags",
+        sort="date_asc",
+        allow_ai=False,
+        excluded_tags=("R18",),
+    )
+
+    assert calls == [
+        (
+            ("黑髮",),
+            {
+                    "search_target": "exact_match_for_tags",
+                    "sort": "date_asc",
+                    "offset": 60,
+                },
+            ),
+        (
+            ("黑髮",),
+            {
+                "search_target": "exact_match_for_tags",
+                "sort": "date_asc",
+                "offset": 90,
+            },
+        ),
+    ]
+    assert [entry.illust_id for entry in result.entries] == [1, 4, 5]
+    assert [entry.position for entry in result.entries] == [1, 2, 3]
+    assert result.page == 2 and not result.exhausted
+
+
+@pytest.mark.anyio
+async def test_tag_provider_combines_two_api_batches_into_sixty_item_page():
+    offsets = []
+
+    class TagAPI:
+        async def search_illust(self, *args, **kwargs):
+            offset = kwargs["offset"]
+            offsets.append(offset)
+            start = 1 if offset is None else offset + 1
+            return {
+                "illusts": [single_illust(id=value) for value in range(start, start + 30)],
+                "next_url": (
+                    "https://app-api.pixiv.net/v1/search/illust?offset="
+                    f"{start + 29}"
+                ),
+            }
+
+    provider = PixivProvider("token", "", 1)
+    provider._api = TagAPI()
+    result = await provider.search_tag_page(
+        "风景",
+        page=1,
+        search_target="partial_match_for_tags",
+        sort="date_desc",
+        allow_ai=True,
+    )
+
+    assert offsets == [None, 30]
+    assert len(result.entries) == 60
+    assert result.entries[0].illust_id == 1
+    assert result.entries[-1].illust_id == 60
+    assert result.entries[-1].position == 60
+    assert not result.exhausted
+
+
+@pytest.mark.anyio
+async def test_tag_provider_allows_ai_when_enabled():
+    class TagAPI:
+        async def search_illust(self, *args, **kwargs):
+            return {
+                "illusts": [single_illust(id=1, illust_ai_type=2)],
+                "next_url": None,
+            }
+
+    provider = PixivProvider("token", "", 1)
+    provider._api = TagAPI()
+    result = await provider.search_tag_page(
+        "AI",
+        page=1,
+        search_target="partial_match_for_tags",
+        sort="date_desc",
+        allow_ai=True,
+    )
+    assert [entry.illust_id for entry in result.entries] == [1]
 
 
 @pytest.mark.anyio

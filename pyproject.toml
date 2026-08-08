@@ -1,7 +1,7 @@
 [project]
 name = "astrbot-plugin-pixiv-lookup"
-version = "1.1.0"
-description = "AstrBot Pixiv artwork and artist lookup plugin for aiocqhttp/NapCat"
+version = "1.2.0"
+description = "AstrBot Pixiv artwork, artist and tag lookup plugin for aiocqhttp/NapCat"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

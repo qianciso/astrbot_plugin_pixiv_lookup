@@ -59,7 +59,7 @@ def split_artwork_items(
 class OneBotMessageSender:
     """直接调用 OneBot 动作，以便取得后续撤回所需的 message_id。"""
 
-    def __init__(self, nickname: str = "Pixiv ID 查询") -> None:
+    def __init__(self, nickname: str = "Pixiv 查询") -> None:
         self.nickname = nickname
 
     @staticmethod

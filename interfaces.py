@@ -15,6 +15,18 @@ from .models import (
     ArtworkPage,
     DownloadedImage,
 )
+from .tag_search import TagAliasProvider, TagSearchPage
+
+__all__ = [
+    "ArtworkProvider",
+    "ArtistArtworkProvider",
+    "TagArtworkProvider",
+    "TagAliasProvider",
+    "ImageProxyStrategy",
+    "MessageSender",
+    "BatchMessageSender",
+    "ContentPolicy",
+]
 
 
 class ArtworkProvider(Protocol):
@@ -33,6 +45,20 @@ class ArtistArtworkProvider(Protocol):
         start_position: int = 1,
     ) -> ArtistWorks:
         """从指定最新排名开始，获取画师的插画/动图静态预览。"""
+
+
+class TagArtworkProvider(Protocol):
+    async def search_tag_page(
+        self,
+        word: str,
+        *,
+        page: int,
+        search_target: str,
+        sort: str,
+        allow_ai: bool,
+        excluded_tags: tuple[str, ...] = (),
+    ) -> TagSearchPage:
+        """获取指定搜索页的标签作品。"""
 
 
 class ImageProxyStrategy(Protocol):

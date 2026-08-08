@@ -1,87 +1,167 @@
 {
-  "pixiv_refresh_token": {
-    "description": "Pixiv refresh token",
-    "type": "string",
-    "default": "",
-    "obvious_hint": true,
-    "hint": "必填。仅用于登录 Pixiv 官方 App API。请勿把实际 token 提交到 Git 仓库或发送给他人。"
+  "global_settings": {
+    "description": "全局内容与发送设置",
+    "type": "object",
+    "hint": "这些选项同时影响 /pi、/pa 和 /pt，包括敏感内容、图片质量、发送方式、图片反代、超时和日志清理。",
+    "items": {
+      "r18_enabled": {
+        "description": "允许发送 R18 作品",
+        "type": "bool",
+        "default": false,
+        "hint": "只控制分级为 R18 的作品，默认关闭。开启后相关消息会按配置时间自动撤回。"
+      },
+      "r18g_enabled": {
+        "description": "允许发送 R18G 作品",
+        "type": "bool",
+        "default": false,
+        "hint": "只控制分级为 R18G 的作品，默认关闭，与 R18 开关相互独立。开启后相关消息会按配置时间自动撤回。"
+      },
+      "r18_recall_seconds": {
+        "description": "R18 消息撤回延迟（秒）",
+        "type": "int",
+        "default": 120,
+        "slider": {"min": 5, "max": 120, "step": 5},
+        "hint": "同时影响已经获准发送的 R18 和 R18G 作品。热重载、停用或卸载插件时，尚未到期的敏感消息会立即撤回。"
+      },
+      "image_size": {
+        "description": "默认图片尺寸",
+        "type": "string",
+        "default": "large",
+        "options": ["original", "large", "medium", "square_medium"],
+        "hint": "原图过大或所选尺寸不可用时会向更小尺寸降级，并在作品信息中标出实际尺寸。"
+      },
+      "send_as_forward": {
+        "description": "使用合并转发发送",
+        "type": "bool",
+        "default": true,
+        "hint": "开启时作品信息和图片组成 QQ 合并聊天记录；关闭时作为普通消息发送。"
+      },
+      "primary_image_proxy": {
+        "description": "首选图片反代",
+        "type": "string",
+        "default": "i.pixiv.re",
+        "options": ["i.pixiv.re", "i.pixiv.nl"],
+        "hint": "首选失败后自动尝试另一个反代；不会回退到 i.pximg.net 直连。"
+      },
+      "request_timeout": {
+        "description": "网络请求超时（秒）",
+        "type": "int",
+        "default": 30,
+        "slider": {"min": 5, "max": 120, "step": 5},
+        "hint": "用于 Pixiv 登录、元数据请求和图片反代下载。"
+      },
+      "log_retention_days": {
+        "description": "插件日志保留天数",
+        "type": "int",
+        "default": 7,
+        "slider": {"min": 1, "max": 30, "step": 1},
+        "hint": "启动时及每 24 小时清理过期轮转日志。日志不会记录 token、完整图片 URL 或图片内容。"
+      }
+    }
   },
-  "pixiv_api_proxy": {
-    "description": "连接 Pixiv 使用的本地代理",
-    "type": "string",
-    "default": "",
-    "hint": "如果机器人无法连接 Pixiv，请填写代理软件提供的本地 HTTP 地址。例如 Clash、Clash Verge、Mihomo 或 v2rayN 设置页中的“HTTP 端口”或“混合端口”为 7890 时，填写 http://127.0.0.1:7890；实际端口以你的代理软件为准。不要填写节点名称、订阅地址，也不要填写日志中 FROM 后面每次变化的临时端口。不使用代理时留空。此项只帮助机器人登录 Pixiv 和读取作品信息，图片仍使用下方的图片反代；暂不支持 SOCKS 或需要用户名、密码的代理。"
+  "pixiv_connection": {
+    "description": "Pixiv 账号与网络",
+    "type": "object",
+    "hint": "配置 Pixiv 官方 App API 的登录凭据和可选本地代理。图片下载不使用这里的 API 代理。",
+    "items": {
+      "pixiv_refresh_token": {
+        "description": "Pixiv refresh token",
+        "type": "string",
+        "default": "",
+        "obvious_hint": true,
+        "hint": "必填。仅用于登录 Pixiv 官方 App API。请勿把实际 token 提交到 Git 仓库或发送给他人。"
+      },
+      "pixiv_api_proxy": {
+        "description": "连接 Pixiv 使用的本地代理",
+        "type": "string",
+        "default": "",
+        "hint": "如果机器人无法连接 Pixiv，请填写代理软件提供的本地 HTTP 地址。例如 Clash、Clash Verge、Mihomo 或 v2rayN 设置页中的“HTTP 端口”或“混合端口”为 7890 时，填写 http://127.0.0.1:7890；实际端口以你的代理软件为准。不要填写节点名称、订阅地址，也不要填写日志中 FROM 后面每次变化的临时端口。不使用代理时留空。暂不支持 SOCKS 或需要用户名、密码的代理。"
+      }
+    }
   },
-  "command_name": {
-    "description": "作品 ID 查询命令",
-    "type": "string",
-    "default": "pi",
-    "hint": "用于按作品 ID 查询。可填写 pi 或 /pi，不允许空格和额外斜杠。保存后 AstrBot 会热重载插件并注册新命令。"
+  "artwork_query": {
+    "description": "/pi 作品 ID 查询",
+    "type": "object",
+    "hint": "配置按 Pixiv 作品 ID 查询的命令名称。",
+    "items": {
+      "command_name": {
+        "description": "作品 ID 查询命令",
+        "type": "string",
+        "default": "pi",
+        "hint": "可填写 pi 或 /pi，不允许空格和额外斜杠。保存后 AstrBot 会热重载插件并注册新命令。"
+      }
+    }
   },
-  "artist_command_name": {
-    "description": "画师查询命令",
-    "type": "string",
-    "default": "pa",
-    "hint": "用于查询画师最新插画。可填写 pa 或 /pa，不能与作品 ID 查询命令同名。"
+  "artist_query": {
+    "description": "/pa 画师查询",
+    "type": "object",
+    "hint": "配置画师作品查询命令，以及 latest 模式单次允许返回的作品数量。",
+    "items": {
+      "artist_command_name": {
+        "description": "画师查询命令",
+        "type": "string",
+        "default": "pa",
+        "hint": "可填写 pa 或 /pa，不能与作品 ID 查询命令或标签查询命令同名。"
+      },
+      "artist_max_results": {
+        "description": "画师查询单次返回上限",
+        "type": "int",
+        "default": 10,
+        "slider": {"min": 1, "max": 20, "step": 1},
+        "hint": "只限制 latest（模式 1）一次返回的作品数量，不限制 pick（模式 0）查询第几个作品。"
+      }
+    }
   },
-  "artist_max_results": {
-    "description": "画师查询单次返回上限",
-    "type": "int",
-    "default": 10,
-    "slider": {"min": 1, "max": 20, "step": 1},
-    "hint": "只限制 latest（模式 1）一次返回的作品数量，不限制 pick（模式 0）查询第几个作品。"
-  },
-  "r18_enabled": {
-    "description": "允许发送 R18 作品",
-    "type": "bool",
-    "default": false,
-    "hint": "只控制分级为 R18 的作品，默认关闭。开启后相关消息会按配置时间自动撤回。"
-  },
-  "r18g_enabled": {
-    "description": "允许发送 R18G 作品",
-    "type": "bool",
-    "default": false,
-    "hint": "只控制分级为 R18G 的作品，默认关闭，与 R18 开关相互独立。开启后相关消息会按配置时间自动撤回。"
-  },
-  "r18_recall_seconds": {
-    "description": "R18 消息撤回延迟（秒）",
-    "type": "int",
-    "default": 120,
-    "slider": {"min": 5, "max": 120, "step": 5},
-    "hint": "影响已经获准发送的 R18/R18G 作品。热重载、停用或卸载插件时，尚未到期的敏感消息会立即撤回。"
-  },
-  "image_size": {
-    "description": "默认图片尺寸",
-    "type": "string",
-    "default": "large",
-    "options": ["original", "large", "medium", "square_medium"],
-    "hint": "原图过大或所选尺寸不可用时会向更小尺寸降级，并在作品信息中标出实际尺寸。"
-  },
-  "send_as_forward": {
-    "description": "使用合并转发发送",
-    "type": "bool",
-    "default": true,
-    "hint": "开启时作品信息和图片组成 QQ 合并聊天记录；关闭时作为一条普通消息发送。"
-  },
-  "primary_image_proxy": {
-    "description": "首选图片反代",
-    "type": "string",
-    "default": "i.pixiv.re",
-    "options": ["i.pixiv.re", "i.pixiv.nl"],
-    "hint": "首选失败后自动尝试另一个反代；不会回退到 i.pximg.net 直连。"
-  },
-  "request_timeout": {
-    "description": "网络请求超时（秒）",
-    "type": "int",
-    "default": 30,
-    "slider": {"min": 5, "max": 120, "step": 5},
-    "hint": "用于 Pixiv 登录、元数据请求和图片反代下载。"
-  },
-  "log_retention_days": {
-    "description": "插件日志保留天数",
-    "type": "int",
-    "default": 7,
-    "slider": {"min": 1, "max": 30, "step": 1},
-    "hint": "启动时及每 24 小时清理过期轮转日志。日志不会记录 token、完整图片 URL 或图片内容。"
+  "tag_query": {
+    "description": "/pt 标签查询",
+    "type": "object",
+    "hint": "配置标签命令、搜索范围、AI 过滤、排序、users入り 收藏门槛和中文标签别名转换。",
+    "items": {
+      "tag_command_name": {
+        "description": "标签查询命令",
+        "type": "string",
+        "default": "pt",
+        "hint": "可填写 pt 或 /pt，不能与作品 ID 查询命令或画师查询命令同名。"
+      },
+      "tag_search_target": {
+        "description": "标签搜索范围",
+        "type": "string",
+        "default": "partial_match_for_tags",
+        "options": ["partial_match_for_tags", "exact_match_for_tags", "title_and_caption"],
+        "hint": "部分一致、标签完全一致，或搜索标题和说明文字。"
+      },
+      "tag_allow_ai": {
+        "description": "标签搜索允许 AI 作品",
+        "type": "bool",
+        "default": false,
+        "hint": "仅在标签搜索中生效。关闭时过滤 Pixiv 明确标记或标签表明为 AI 的作品。"
+      },
+      "tag_sort": {
+        "description": "标签搜索排序",
+        "type": "string",
+        "default": "date_desc",
+        "options": ["date_desc", "date_asc", "popular_desc"],
+        "hint": "日期降序、日期升序或热门排序。热门排序可能需要 Pixiv 会员，失败时改用日期降序。"
+      },
+      "tag_popular_fallback_enabled": {
+        "description": "追加 users入り 收藏标签",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，在搜索词末尾追加一个独立的 Pixiv 标签，例如“黑髮 500users入り”。它按收藏门槛近似筛选作品，不等同于官方热门排序；若已输入 users入り 标签时不会重复追加。"
+      },
+      "tag_popular_bookmark_threshold": {
+        "description": "users入り 收藏数门槛",
+        "type": "int",
+        "default": 500,
+        "options": [100, 250, 500, 1000, 5000, 7500, 10000, 20000, 30000, 50000],
+        "hint": "开关开启时追加的 Pixiv 标签，例如 500users入り 表示收藏数达到约 500 的作品。"
+      },
+      "tag_translate_enabled": {
+        "description": "启用标签别名转换",
+        "type": "bool",
+        "default": true,
+        "hint": "使用插件自带 TSV 词典，将常见中文或英文属性转换为 Pixiv 常用标签；未知标签原样搜索。带空格的英文短语需要使用英文引号，例如 /pt \"black hair\"。"
+      }
+    }
   }
 }

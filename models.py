@@ -49,6 +49,7 @@ class Artwork:
     width: int | None
     height: int | None
     pages: tuple[ArtworkPage, ...]
+    translated_tags: tuple[str, ...] = ()
 
     @property
     def page_count(self) -> int:

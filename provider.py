@@ -25,6 +25,10 @@ from .models import (
     ArtworkPage,
     Rating,
 )
+from .tag_search import TagSearchEntry, TagSearchPage, has_tag
+
+PIXIV_SEARCH_BATCH_SIZE = 30
+TAG_SEARCH_PAGE_SIZE = 60
 
 
 class _CaptionParser(HTMLParser):
@@ -77,6 +81,18 @@ def _extract_tags(raw_tags: object) -> tuple[str, ...]:
     return tuple(tags)
 
 
+def _extract_translated_tags(raw_tags: object) -> tuple[str, ...]:
+    tags: list[str] = []
+    if not isinstance(raw_tags, list):
+        return ()
+    for raw in raw_tags:
+        value = raw.get("translated_name") if isinstance(raw, dict) else None
+        value = str(value or "").strip()
+        if value and value not in tags:
+            tags.append(value)
+    return tuple(tags)
+
+
 def classify_rating(illust: dict[str, Any], tags: tuple[str, ...]) -> Rating:
     """优先使用 x_restrict；字段缺失时才使用标签兜底。"""
 
@@ -122,6 +138,7 @@ def parse_artwork(illust: dict[str, Any]) -> Artwork:
         raise MetadataError("作品元数据缺少合法 ID") from exc
 
     tags = _extract_tags(illust.get("tags"))
+    translated_tags = _extract_translated_tags(illust.get("tags"))
     rating = classify_rating(illust, tags)
     try:
         declared_page_count = int(illust.get("page_count", 1))
@@ -174,6 +191,7 @@ def parse_artwork(illust: dict[str, Any]) -> Artwork:
         width=optional_int(illust.get("width")),
         height=optional_int(illust.get("height")),
         pages=tuple(pages),
+        translated_tags=translated_tags,
     )
 
 
@@ -410,6 +428,107 @@ class PixivProvider:
             raise ProviderError("Pixiv 画师作品分页次数异常")
 
         return ArtistWorks(profile=profile, entries=tuple(entries), exhausted=exhausted)
+
+    @staticmethod
+    def _raw_is_ai(illust: object) -> bool:
+        """兼容 Pixiv 搜索结果中的 AI 字段和标签字段。"""
+
+        if not isinstance(illust, dict):
+            return False
+        for key in ("illust_ai_type", "illustAiType", "ai_type", "aiType"):
+            try:
+                if int(illust.get(key)) == 2:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        tags = _extract_tags(illust.get("tags"))
+        ai_words = {"ai", "ai生成", "ai-generated", "ai辅助"}
+        return any(tag.casefold() in ai_words for tag in tags)
+
+    async def search_tag_page(
+        self,
+        word: str,
+        *,
+        page: int,
+        search_target: str,
+        sort: str,
+        allow_ai: bool,
+        excluded_tags: tuple[str, ...] = (),
+    ) -> TagSearchPage:
+        """读取最多 60 项的标签搜索页，并完成 AI 与排除标签过滤。
+
+        Pixiv App API 单次通常只返回 30 项，因此一个与官网一致的逻辑页由
+        两个连续 API 批次组成：第 N 页从 ``(N - 1) * 60`` 开始读取。
+        """
+
+        if not str(word or "").strip():
+            raise ProviderError("Pixiv 标签搜索词为空")
+        page = max(1, int(page))
+        api = await self._get_api()
+        normalized_word = str(word).strip()
+        page_start = (page - 1) * TAG_SEARCH_PAGE_SIZE
+        raw_illusts: list[object] = []
+        has_next_batch = False
+        for batch_index in range(TAG_SEARCH_PAGE_SIZE // PIXIV_SEARCH_BATCH_SIZE):
+            offset = page_start + batch_index * PIXIV_SEARCH_BATCH_SIZE
+            try:
+                response = await asyncio.wait_for(
+                    api.search_illust(
+                        normalized_word,
+                        search_target=search_target,
+                        sort=sort,
+                        offset=offset or None,
+                    ),
+                    timeout=self.timeout,
+                )
+            except asyncio.TimeoutError as exc:
+                raise ProviderError("Pixiv 标签搜索请求超时") from exc
+            except Exception as exc:
+                if _looks_not_found(str(exc).casefold()):
+                    raise ProviderError("Pixiv 标签搜索不可用") from exc
+                raise ProviderError("Pixiv 标签搜索请求失败") from exc
+
+            if not isinstance(response, dict):
+                raise ProviderError("Pixiv 标签搜索返回格式异常")
+            if response.get("error"):
+                raise ProviderError("Pixiv 标签搜索被拒绝")
+            batch_illusts = response.get("illusts")
+            if not isinstance(batch_illusts, list):
+                raise ProviderError("Pixiv 标签搜索作品列表格式异常")
+            raw_illusts.extend(batch_illusts)
+
+            next_url = response.get("next_url")
+            has_next_batch = isinstance(next_url, str) and bool(next_url.strip())
+            if not has_next_batch:
+                break
+
+        entries: list[TagSearchEntry] = []
+        seen_ids: set[int] = set()
+        for raw in raw_illusts:
+            if not allow_ai and self._raw_is_ai(raw):
+                continue
+            if not isinstance(raw, dict):
+                entries.append(TagSearchEntry(len(entries) + 1, None, None))
+                continue
+            try:
+                artwork = parse_artwork(raw)
+            except MetadataError:
+                artwork = None
+            if artwork is not None and excluded_tags and has_tag(artwork, excluded_tags):
+                continue
+            illust_id = _optional_positive_int(raw.get("id"))
+            if illust_id is not None:
+                if illust_id in seen_ids:
+                    continue
+                seen_ids.add(illust_id)
+            entries.append(TagSearchEntry(len(entries) + 1, illust_id, artwork))
+
+        return TagSearchPage(
+            entries=tuple(entries),
+            page=page,
+            exhausted=not has_next_batch,
+            used_search_word=normalized_word,
+        )
 
     async def close(self) -> None:
         async with self._lock:

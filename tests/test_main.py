@@ -7,12 +7,17 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from astrbot_plugin_pixiv_lookup.exceptions import ImageDownloadError
+from astrbot_plugin_pixiv_lookup.exceptions import (
+    BatchMessageSendError,
+    ImageDownloadError,
+    ProviderError,
+)
 from astrbot_plugin_pixiv_lookup.main import (
     DEFAULT_ARTIST_COMMAND,
     DEFAULT_COMMAND,
     TEMP_ARTIST_COMMAND,
     TEMP_ARTWORK_COMMAND,
+    TEMP_TAG_COMMAND,
     PixivLookupPlugin,
     normalize_command_name,
     parse_artist_command_args,
@@ -27,6 +32,7 @@ from astrbot_plugin_pixiv_lookup.models import (
     DownloadedImage,
     Rating,
 )
+from astrbot_plugin_pixiv_lookup.tag_search import TagSearchEntry, TagSearchPage
 
 
 @pytest.mark.parametrize(
@@ -89,36 +95,126 @@ def test_normalize_command_accepts_optional_slash_and_rejects_spaces():
 def test_config_schema_has_required_defaults_and_ranges():
     schema_path = Path(__file__).resolve().parents[1] / "_conf_schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    assert schema["command_name"]["default"] == "pi"
-    assert schema["artist_command_name"]["default"] == "pa"
-    assert schema["artist_max_results"]["default"] == 10
-    assert schema["artist_max_results"]["slider"] == {
+    assert list(schema) == [
+        "global_settings",
+        "pixiv_connection",
+        "artwork_query",
+        "artist_query",
+        "tag_query",
+    ]
+    global_items = schema["global_settings"]["items"]
+    connection_items = schema["pixiv_connection"]["items"]
+    artwork_items = schema["artwork_query"]["items"]
+    artist_items = schema["artist_query"]["items"]
+    tag_items = schema["tag_query"]["items"]
+    assert all(group["type"] == "object" for group in schema.values())
+    assert list(global_items) == [
+        "r18_enabled",
+        "r18g_enabled",
+        "r18_recall_seconds",
+        "image_size",
+        "send_as_forward",
+        "primary_image_proxy",
+        "request_timeout",
+        "log_retention_days",
+    ]
+    assert list(artist_items) == ["artist_command_name", "artist_max_results"]
+    assert list(tag_items) == [
+        "tag_command_name",
+        "tag_search_target",
+        "tag_allow_ai",
+        "tag_sort",
+        "tag_popular_fallback_enabled",
+        "tag_popular_bookmark_threshold",
+        "tag_translate_enabled",
+    ]
+    assert connection_items["pixiv_refresh_token"]["default"] == ""
+    assert artwork_items["command_name"]["default"] == "pi"
+    assert artist_items["artist_command_name"]["default"] == "pa"
+    assert tag_items["tag_command_name"]["default"] == "pt"
+    assert tag_items["tag_search_target"]["default"] == "partial_match_for_tags"
+    assert tag_items["tag_allow_ai"]["default"] is False
+    assert tag_items["tag_sort"]["default"] == "date_desc"
+    assert tag_items["tag_popular_fallback_enabled"]["default"] is True
+    assert tag_items["tag_popular_bookmark_threshold"]["default"] == 500
+    assert tag_items["tag_translate_enabled"]["default"] is True
+    assert artist_items["artist_max_results"]["default"] == 10
+    assert artist_items["artist_max_results"]["slider"] == {
         "min": 1,
         "max": 20,
         "step": 1,
     }
-    assert schema["r18_enabled"]["default"] is False
-    assert schema["r18g_enabled"]["default"] is False
-    assert schema["r18_recall_seconds"]["default"] == 120
-    assert schema["r18_recall_seconds"]["slider"] == {"min": 5, "max": 120, "step": 5}
-    assert schema["image_size"]["options"] == [
+    assert global_items["r18_enabled"]["default"] is False
+    assert global_items["r18g_enabled"]["default"] is False
+    assert global_items["r18_recall_seconds"]["default"] == 120
+    assert global_items["r18_recall_seconds"]["slider"] == {
+        "min": 5,
+        "max": 120,
+        "step": 5,
+    }
+    assert global_items["image_size"]["options"] == [
         "original",
         "large",
         "medium",
         "square_medium",
     ]
-    assert schema["primary_image_proxy"]["options"] == ["i.pixiv.re", "i.pixiv.nl"]
+    assert global_items["primary_image_proxy"]["options"] == [
+        "i.pixiv.re",
+        "i.pixiv.nl",
+    ]
 
 
-def test_v11_version_metadata_and_readme_notice_are_synchronized():
+def test_grouped_config_is_read_and_legacy_flat_config_is_migrated():
+    grouped = PixivLookupPlugin(
+        object(),
+        {
+            "global_settings": {"r18_enabled": True, "image_size": "medium"},
+            "artist_query": {"artist_command_name": "artist", "artist_max_results": 17},
+            "tag_query": {"tag_sort": "date_asc"},
+        },
+    )
+    assert grouped._cfg_bool("r18_enabled", False) is True
+    assert grouped._cfg_str("image_size") == "medium"
+    assert grouped._configured_command("artist_command_name", "pa") == "artist"
+    assert grouped._cfg_int("artist_max_results", 10, 1, 20) == 17
+    assert grouped._cfg_str("tag_sort") == "date_asc"
+
+    class SavingConfig(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.save_calls = 0
+
+        def save_config(self):
+            self.save_calls += 1
+
+    legacy = SavingConfig(
+        {
+            "r18_enabled": True,
+            "artist_command_name": "artist",
+            "tag_sort": "date_asc",
+        },
+    )
+    migrated = PixivLookupPlugin(object(), legacy)
+
+    assert legacy.save_calls == 1
+    assert "r18_enabled" not in legacy
+    assert legacy["global_settings"]["r18_enabled"] is True
+    assert legacy["artist_query"]["artist_command_name"] == "artist"
+    assert legacy["tag_query"]["tag_sort"] == "date_asc"
+    assert migrated._cfg_bool("r18_enabled", False) is True
+
+
+def test_v12_version_metadata_and_readme_notice_are_synchronized():
     root = Path(__file__).resolve().parents[1]
     metadata = (root / "metadata.yaml").read_text(encoding="utf-8")
     project = (root / "pyproject.toml").read_text(encoding="utf-8")
     readme = (root / "README.md").read_text(encoding="utf-8")
-    assert "version: v1.1.0" in metadata
-    assert 'version = "1.1.0"' in project
-    assert "## v1.1.0 更新内容" in readme[:1000]
+    assert "version: v1.2.0" in metadata
+    assert 'version = "1.2.0"' in project
+    assert "## v1.2.0 更新内容（2026-08-08）" in readme[:1200]
+    assert "Pixiv 查询" in metadata
     assert "/pa" in readme[:1000]
+    assert "/pt" in readme[:1600]
 
 
 class FakeLog:
@@ -146,16 +242,21 @@ async def test_command_name_is_synchronized(monkeypatch):
         calls.append((handler, command, aliases))
 
     install_command_module(monkeypatch, rename)
-    plugin = PixivLookupPlugin(object(), {"command_name": "/pixiv"})
+    plugin = PixivLookupPlugin(
+        object(),
+        {"command_name": "/pixiv", "tag_command_name": "/tags"},
+    )
     plugin.file_logs = FakeLog()
     await plugin._configure_commands()
     assert [call[1] for call in calls] == [
         TEMP_ARTWORK_COMMAND,
         TEMP_ARTIST_COMMAND,
+        TEMP_TAG_COMMAND,
         "pixiv",
         "pa",
+        "tags",
     ]
-    assert len(plugin._command_records) == 2
+    assert len(plugin._command_records) == 3
 
 
 @pytest.mark.anyio
@@ -174,11 +275,13 @@ async def test_command_conflict_falls_back_to_pi(monkeypatch):
     assert calls == [
         TEMP_ARTWORK_COMMAND,
         TEMP_ARTIST_COMMAND,
+        TEMP_TAG_COMMAND,
         "occupied",
         "pi",
         "pa",
+        "pt",
     ]
-    assert len(plugin._command_records) == 2
+    assert len(plugin._command_records) == 3
 
 
 @pytest.mark.anyio
@@ -198,10 +301,40 @@ async def test_two_configured_commands_cannot_have_the_same_name(monkeypatch):
     assert calls == [
         TEMP_ARTWORK_COMMAND,
         TEMP_ARTIST_COMMAND,
+        TEMP_TAG_COMMAND,
         DEFAULT_COMMAND,
         DEFAULT_ARTIST_COMMAND,
+        "pt",
     ]
-    assert any(event[1] == "command_pair_conflict" for event in plugin.file_logs.events)
+    assert any(event[1] == "command_group_conflict" for event in plugin.file_logs.events)
+
+
+@pytest.mark.anyio
+async def test_phelp_is_reserved_from_query_command_renaming(monkeypatch):
+    calls = []
+
+    async def rename(handler, command, aliases):
+        calls.append(command)
+
+    install_command_module(monkeypatch, rename)
+    plugin = PixivLookupPlugin(object(), {"command_name": "phelp"})
+    plugin.file_logs = FakeLog()
+
+    await plugin._configure_commands()
+
+    assert calls == [
+        TEMP_ARTWORK_COMMAND,
+        TEMP_ARTIST_COMMAND,
+        TEMP_TAG_COMMAND,
+        "pi",
+        "pa",
+        "pt",
+    ]
+    assert plugin._active_commands["artwork"] == "pi"
+    assert any(
+        event[1] == "command_reserved_conflict"
+        for event in plugin.file_logs.events
+    )
 
 
 def make_artwork(rating=Rating.SAFE):
@@ -237,11 +370,13 @@ def make_artist_works(*artworks, exhausted=True):
 
 
 class FakeProvider:
-    def __init__(self, artwork, artist_works=None):
+    def __init__(self, artwork, artist_works=None, tag_page=None):
         self.artwork = artwork
         self.artist_works = artist_works
+        self.tag_page = tag_page
         self.closed = False
         self.artist_calls = []
+        self.tag_calls = []
 
     async def get_artwork(self, illust_id):
         return self.artwork
@@ -256,6 +391,10 @@ class FakeProvider:
             if entry.position >= start_position
         )[:limit]
         return replace(self.artist_works, entries=entries)
+
+    async def search_tag_page(self, word, **kwargs):
+        self.tag_calls.append((word, kwargs))
+        return self.tag_page
 
     async def close(self):
         self.closed = True
@@ -316,6 +455,34 @@ class FakeEvent:
 
     def get_self_id(self):
         return "42"
+
+
+@pytest.mark.anyio
+async def test_phelp_lists_all_commands_formats_and_active_custom_names():
+    plugin = PixivLookupPlugin(object(), {"artist_max_results": 15})
+    plugin._active_commands.update(
+        {
+            "artwork": "pixiv",
+            "artist": "artist",
+            "tag": "tag",
+        },
+    )
+    event = FakeEvent()
+
+    results = [item async for item in plugin.pixiv_help(event)]
+
+    assert event.stopped
+    assert len(results) == 1
+    help_text = results[0]
+    assert "Pixiv 查询 v1.2.0 指令帮助" in help_text
+    assert "/pixiv <作品ID> [图片页码]" in help_text
+    assert "/artist <画师ID> [数量或排名] [1|0]" in help_text
+    assert "当前上限为 15" in help_text
+    assert "/tag <标签...> [数量或排名] [1|0] [搜索页]" in help_text
+    assert "每个搜索页最多 60 项" in help_text
+    assert '/tag "black hair"' in help_text
+    assert "/phelp" in help_text
+    assert "/pixiv <作品ID> <图片页码>" in help_text
 
 
 @pytest.mark.anyio
@@ -524,6 +691,184 @@ async def test_artist_latest_uses_configured_maximum():
 
 
 @pytest.mark.anyio
+async def test_tag_lookup_uses_aliases_search_page_and_sends_first_artwork_page():
+    artwork = replace(make_artwork(), illust_id=701)
+    page = TagSearchPage(
+        entries=(TagSearchEntry(1, artwork.illust_id, artwork),),
+        page=2,
+        exhausted=True,
+        used_search_word="黒髪",
+    )
+    provider = FakeProvider(artwork, tag_page=page)
+    plugin = PixivLookupPlugin(object(), {"tag_translate_enabled": True})
+    plugin.provider = provider
+    plugin.image_proxy = FakeProxy()
+    plugin.sender = FakeSender()
+
+    results = [item async for item in plugin.tag_lookup(FakeEvent(), "黑发 1 2")]
+
+    assert len(results) == 1
+    assert "未填写模式参数" in results[0]
+    assert provider.tag_calls == [
+        (
+            "黒髪 500users入り",
+            {
+                "page": 2,
+                "search_target": "partial_match_for_tags",
+                "sort": "date_desc",
+                "allow_ai": False,
+                "excluded_tags": (),
+            },
+        ),
+    ]
+    assert plugin.image_proxy.calls == [(1, "large")]
+    assert "实际搜索词：黒髪" in plugin.sender.batch_calls[0][0]
+    assert "搜索页：第 2 页" in plugin.sender.batch_calls[0][0]
+
+
+@pytest.mark.anyio
+async def test_tag_lookup_all_blocked_returns_tag_summary_without_image():
+    artwork = replace(make_artwork(Rating.R18), illust_id=702)
+    page = TagSearchPage((TagSearchEntry(1, 702, artwork),), 1, True, "黒髪")
+    plugin = PixivLookupPlugin(object(), {"r18_enabled": False})
+    plugin.provider = FakeProvider(artwork, tag_page=page)
+    plugin.image_proxy = FakeProxy()
+    plugin.sender = FakeSender()
+
+    results = [item async for item in plugin.tag_lookup(FakeEvent(), "黑发")]
+
+    assert len(results) == 1
+    assert "标签：黑发" in results[0]
+    assert "实际搜索词：黒髪" in results[0]
+    assert "标签查询提示" in results[0]
+    assert "因分级设置跳过：702（R-18）" in results[0]
+    assert plugin.image_proxy.calls == []
+    assert plugin.sender.batch_calls == []
+
+
+@pytest.mark.anyio
+async def test_tag_sensitive_batch_failure_without_message_id_reports_unknown_state():
+    artwork = replace(make_artwork(Rating.R18), illust_id=706)
+    page = TagSearchPage((TagSearchEntry(1, 706, artwork),), 1, True, "兔耳")
+
+    class FailedSender(FakeSender):
+        async def send_artworks(self, event, header, items, *, as_forward):
+            raise BatchMessageSendError("OneBot 批量发送图片失败") from TimeoutError
+
+    plugin = PixivLookupPlugin(object(), {"r18_enabled": True})
+    plugin.provider = FakeProvider(artwork, tag_page=page)
+    plugin.image_proxy = FakeProxy()
+    plugin.sender = FailedSender()
+    plugin.recall_manager = FakeRecall()
+
+    results = [item async for item in plugin.tag_lookup(FakeEvent(), "兔耳")]
+
+    assert len(results) == 1
+    assert "敏感作品发送失败或状态未知" in results[0]
+    assert "未取得消息 ID，无法安排自动撤回" in results[0]
+    assert "仅部分发送成功" not in results[0]
+    assert plugin.recall_manager.calls == []
+
+
+def test_batch_failure_with_confirmed_message_id_reports_partial_unknown_state():
+    text = PixivLookupPlugin._batch_send_failure_text(
+        "敏感作品",
+        ("123",),
+        sensitive=True,
+    )
+
+    assert "仅部分确认发送成功" in text
+    assert "未能自动撤回" in text
+
+
+@pytest.mark.anyio
+async def test_tag_popular_sort_falls_back_to_users_tag():
+    artwork = replace(make_artwork(), illust_id=703)
+    page = TagSearchPage((TagSearchEntry(1, 703, artwork),), 1, True, "黒髪 500users入り")
+
+    class PopularProvider(FakeProvider):
+        async def search_tag_page(self, word, **kwargs):
+            self.tag_calls.append((word, kwargs))
+            if kwargs["sort"] == "popular_desc":
+                raise ProviderError("需要会员")
+            return page
+
+    provider = PopularProvider(artwork)
+    plugin = PixivLookupPlugin(
+        object(),
+        {
+            "tag_sort": "popular_desc",
+            "tag_popular_fallback_enabled": True,
+            "tag_popular_bookmark_threshold": 500,
+        },
+    )
+    plugin.provider = provider
+    plugin.image_proxy = FakeProxy()
+    plugin.sender = FakeSender()
+
+    results = [item async for item in plugin.tag_lookup(FakeEvent(), "黑发")]
+
+    assert len(provider.tag_calls) == 2
+    assert provider.tag_calls[0][0] == "黒髪 500users入り"
+    assert provider.tag_calls[0][1]["sort"] == "popular_desc"
+    assert provider.tag_calls[1][0] == "黒髪 500users入り"
+    assert provider.tag_calls[1][1]["sort"] == "date_desc"
+    assert results and "官方热门排序不可用" in results[0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("config", "raw_query", "expected_word"),
+    [
+        (
+            {
+                "tag_popular_fallback_enabled": True,
+                "tag_popular_bookmark_threshold": 1000,
+            },
+            "黑发",
+            "黒髪 1000users入り",
+        ),
+        (
+            {
+                "tag_popular_fallback_enabled": True,
+                "tag_popular_bookmark_threshold": 500,
+            },
+            "黑发 1000users入り",
+            "黒髪 1000users入り",
+        ),
+        (
+            {"tag_popular_fallback_enabled": False},
+            "黑发",
+            "黒髪",
+        ),
+    ],
+)
+async def test_tag_users_tag_is_appended_as_a_separate_search_tag(
+    config,
+    raw_query,
+    expected_word,
+):
+    artwork = replace(make_artwork(), illust_id=704)
+    page = TagSearchPage(
+        (TagSearchEntry(1, 704, artwork),),
+        1,
+        True,
+        expected_word,
+    )
+    provider = FakeProvider(artwork, tag_page=page)
+    plugin = PixivLookupPlugin(object(), config)
+    plugin.provider = provider
+    plugin.image_proxy = FakeProxy()
+    plugin.sender = FakeSender()
+
+    results = [item async for item in plugin.tag_lookup(FakeEvent(), raw_query)]
+
+    assert results == []
+    assert provider.tag_calls[0][0] == expected_word
+    assert f"实际搜索词：{expected_word}" in plugin.sender.batch_calls[0][0]
+
+
+@pytest.mark.anyio
 async def test_artist_metadata_and_download_failures_do_not_hide_successful_items():
     failed_download = replace(
         make_artwork(),
@@ -589,13 +934,14 @@ async def test_terminate_closes_resources_and_removes_command_record(monkeypatch
     plugin.file_logs = logs
     artwork_handler = plugin._handler_full_name(PixivLookupPlugin.pixiv_lookup)
     artist_handler = plugin._handler_full_name(PixivLookupPlugin.artist_lookup)
-    plugin._command_records = {artwork_handler, artist_handler}
+    tag_handler = plugin._handler_full_name(PixivLookupPlugin.tag_lookup)
+    plugin._command_records = {artwork_handler, artist_handler, tag_handler}
 
     await plugin.terminate()
 
     assert recall.calls == [("shutdown",)]
     assert provider.closed and proxy.closed and logs.closed
-    assert deleted == sorted([artwork_handler, artist_handler])
+    assert deleted == sorted([artwork_handler, artist_handler, tag_handler])
     assert plugin.provider is None
     assert plugin.image_proxy is None
     assert plugin.recall_manager is None
